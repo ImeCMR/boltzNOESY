@@ -127,6 +127,7 @@ class PredictionDataset(torch.utils.data.Dataset):
         target_dir: Path,
         msa_dir: Path,
         constraints_dir: Optional[Path] = None,
+        noesy_restraints_dir: Optional[Path] = None,
     ) -> None:
         """Initialize the training dataset.
 
@@ -145,6 +146,7 @@ class PredictionDataset(torch.utils.data.Dataset):
         self.target_dir = target_dir
         self.msa_dir = msa_dir
         self.constraints_dir = constraints_dir
+        self.noesy_restraints_dir = noesy_restraints_dir
         self.tokenizer = BoltzTokenizer()
         self.featurizer = BoltzFeaturizer()
 
@@ -206,6 +208,93 @@ class PredictionDataset(torch.utils.data.Dataset):
             return self.__getitem__(0)
 
         features["record"] = record
+
+        # === ADDED NOESY PROCESSING LOGIC ===
+        structure = input_data.structure # Get the loaded Structure object
+
+        if self.noesy_restraints_dir and features["record"]: # Ensure record is loaded
+            record_id = features["record"].id
+            noesy_file_path = self.noesy_restraints_dir / f"{record_id}_noesy.npz"
+            
+            if noesy_file_path.exists():
+                try:
+                    # allow_pickle=True because atom_names were saved with dtype='O'
+                    noesy_data_npz = np.load(noesy_file_path, allow_pickle=True) 
+
+                    atom_names_1_tuples = noesy_data_npz['atom_names_1']
+                    atom_names_2_tuples = noesy_data_npz['atom_names_2']
+
+                    atom_names_1_str_list = ["".join(map(lambda x: chr(x + 32), name_tuple)).strip() for name_tuple in atom_names_1_tuples]
+                    atom_names_2_str_list = ["".join(map(lambda x: chr(x + 32), name_tuple)).strip() for name_tuple in atom_names_2_tuples]
+                    
+                    res_indices_1_np = noesy_data_npz['res_idx_1']
+                    res_indices_2_np = noesy_data_npz['res_idx_2']
+                    
+                    mapped_atom_indices_1 = []
+                    mapped_atom_indices_2 = []
+                    valid_restraint_indices = [] 
+
+                    for i in range(len(res_indices_1_np)):
+                        g_res_idx_1 = res_indices_1_np[i]
+                        target_atom_name_1 = atom_names_1_str_list[i]
+                        g_res_idx_2 = res_indices_2_np[i]
+                        target_atom_name_2 = atom_names_2_str_list[i]
+                        
+                        atom_idx_1 = -1
+                        atom_idx_2 = -1
+
+                        if 0 <= g_res_idx_1 < len(structure.residues):
+                            res1_struct = structure.residues[g_res_idx_1]
+                            for current_atom_struct_idx_in_res_array in range(res1_struct['atom_idx'], res1_struct['atom_idx'] + res1_struct['atom_num']):
+                                atom_struct = structure.atoms[current_atom_struct_idx_in_res_array]
+                                current_atom_name_str = "".join(map(lambda x: chr(x + 32), atom_struct['name'])).strip()
+                                if current_atom_name_str == target_atom_name_1:
+                                    atom_idx_1 = current_atom_struct_idx_in_res_array
+                                    break
+                        
+                        if 0 <= g_res_idx_2 < len(structure.residues):
+                            res2_struct = structure.residues[g_res_idx_2]
+                            for current_atom_struct_idx_in_res_array in range(res2_struct['atom_idx'], res2_struct['atom_idx'] + res2_struct['atom_num']):
+                                atom_struct = structure.atoms[current_atom_struct_idx_in_res_array]
+                                current_atom_name_str = "".join(map(lambda x: chr(x + 32), atom_struct['name'])).strip()
+                                if current_atom_name_str == target_atom_name_2:
+                                    atom_idx_2 = current_atom_struct_idx_in_res_array
+                                    break
+                        
+                        if atom_idx_1 != -1 and atom_idx_2 != -1:
+                            mapped_atom_indices_1.append(atom_idx_1)
+                            mapped_atom_indices_2.append(atom_idx_2)
+                            valid_restraint_indices.append(i)
+                    
+                    if not valid_restraint_indices:
+                        features['noesy_atom_idx_1'] = torch.empty(0, dtype=torch.long)
+                        features['noesy_atom_idx_2'] = torch.empty(0, dtype=torch.long)
+                        features['noesy_target_distances'] = torch.empty(0, dtype=torch.float32)
+                        features['noesy_tolerances'] = torch.empty(0, dtype=torch.float32)
+                    else:
+                        features['noesy_atom_idx_1'] = torch.tensor(mapped_atom_indices_1, dtype=torch.long)
+                        features['noesy_atom_idx_2'] = torch.tensor(mapped_atom_indices_2, dtype=torch.long)
+                        features['noesy_target_distances'] = torch.from_numpy(noesy_data_npz['target_distances'][valid_restraint_indices].astype(np.float32))
+                        features['noesy_tolerances'] = torch.from_numpy(noesy_data_npz['tolerances'][valid_restraint_indices].astype(np.float32))
+
+                except Exception as e:
+                    print(f"Error loading or processing NOESY file {noesy_file_path} for record {record_id}: {e}")
+                    features['noesy_atom_idx_1'] = torch.empty(0, dtype=torch.long)
+                    features['noesy_atom_idx_2'] = torch.empty(0, dtype=torch.long)
+                    features['noesy_target_distances'] = torch.empty(0, dtype=torch.float32)
+                    features['noesy_tolerances'] = torch.empty(0, dtype=torch.float32)
+            else: 
+                features['noesy_atom_idx_1'] = torch.empty(0, dtype=torch.long)
+                features['noesy_atom_idx_2'] = torch.empty(0, dtype=torch.long)
+                features['noesy_target_distances'] = torch.empty(0, dtype=torch.float32)
+                features['noesy_tolerances'] = torch.empty(0, dtype=torch.float32)
+        else: 
+            features['noesy_atom_idx_1'] = torch.empty(0, dtype=torch.long)
+            features['noesy_atom_idx_2'] = torch.empty(0, dtype=torch.long)
+            features['noesy_target_distances'] = torch.empty(0, dtype=torch.float32)
+            features['noesy_tolerances'] = torch.empty(0, dtype=torch.float32)
+        # === END OF ADDED NOESY LOGIC ===
+
         return features
 
     def __len__(self) -> int:
@@ -230,6 +319,7 @@ class BoltzInferenceDataModule(pl.LightningDataModule):
         msa_dir: Path,
         num_workers: int,
         constraints_dir: Optional[Path] = None,
+        noesy_restraints_dir: Optional[Path] = None,
     ) -> None:
         """Initialize the DataModule.
 
@@ -245,6 +335,7 @@ class BoltzInferenceDataModule(pl.LightningDataModule):
         self.target_dir = target_dir
         self.msa_dir = msa_dir
         self.constraints_dir = constraints_dir
+        self.noesy_restraints_dir = noesy_restraints_dir
 
     def predict_dataloader(self) -> DataLoader:
         """Get the training dataloader.
@@ -260,6 +351,7 @@ class BoltzInferenceDataModule(pl.LightningDataModule):
             target_dir=self.target_dir,
             msa_dir=self.msa_dir,
             constraints_dir=self.constraints_dir,
+            noesy_restraints_dir=self.noesy_restraints_dir,
         )
         return DataLoader(
             dataset,

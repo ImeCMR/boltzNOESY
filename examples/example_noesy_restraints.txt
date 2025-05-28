@@ -1,0 +1,6 @@
+# residueFrom(1-idx) residueTo(1-idx) peakID distance atomFrom atomTo
+1	5	1	3.5	H	HB2
+2	10	2	4.0	HB1	HD11
+3	7	3	2.8	HG11	HD12
+20	15	4	5.0	H	H
+8	12	5	2.3	HG13	HD1

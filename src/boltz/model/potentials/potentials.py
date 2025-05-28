@@ -5,6 +5,7 @@ from copy import deepcopy
 import torch
 
 from boltz.data import const
+from boltz.data.types import NOESYConstraint # Added for context, not directly used in this file yet
 from boltz.model.potentials.schedules import *
 
 class Potential(ABC):
@@ -314,6 +315,63 @@ class PlanarBondPotential(FlatBottomPotential, AbsDihedralPotential):
 
         return improper_index, (k, lower_bounds, upper_bounds), None
 
+class NOESYPotential(FlatBottomPotential, DistancePotential):
+    def __init__(self, parameters: Optional[Dict[str, Union[ParameterSchedule, float, int, bool]]] = None):
+        super().__init__(parameters)
+
+    def compute_args(self, feats: Dict[str, torch.Tensor], parameters: Dict) -> tuple:
+        # Ensure all required keys are present in feats
+        required_keys = ['noesy_atom_idx_1', 'noesy_atom_idx_2', 'noesy_target_distances', 'noesy_tolerances']
+        for key in required_keys:
+            if key not in feats:
+                # If any NOESY key is missing, return empty tensors to effectively disable the potential
+                # This handles cases where NOESY data might not be available for a given sample
+                empty_pair_index = torch.empty((2, 0), dtype=torch.long, device=feats.get(next(iter(feats)), torch.tensor([])).device) # Get device from any existing tensor
+                empty_args = (
+                    torch.empty((0,), device=empty_pair_index.device), 
+                    torch.empty((0,), device=empty_pair_index.device), 
+                    torch.empty((0,), device=empty_pair_index.device)
+                )
+                return empty_pair_index, empty_args, None
+
+        noesy_atom_idx_1 = feats['noesy_atom_idx_1']
+        noesy_atom_idx_2 = feats['noesy_atom_idx_2']
+        target_distances = feats['noesy_target_distances']
+        tolerances = feats['noesy_tolerances']
+
+        # If any of the tensors are empty (e.g. no restraints for this specific sample after filtering)
+        if noesy_atom_idx_1.numel() == 0 or noesy_atom_idx_2.numel() == 0 or target_distances.numel() == 0 or tolerances.numel() == 0:
+            empty_pair_index = torch.empty((2, 0), dtype=torch.long, device=noesy_atom_idx_1.device)
+            empty_args = (
+                torch.empty((0,), device=noesy_atom_idx_1.device),
+                torch.empty((0,), device=noesy_atom_idx_1.device),
+                torch.empty((0,), device=noesy_atom_idx_1.device)
+            )
+            return empty_pair_index, empty_args, None
+            
+        pair_index = torch.stack([noesy_atom_idx_1, noesy_atom_idx_2], dim=0)
+        
+        lower_bounds = target_distances - tolerances
+        upper_bounds = target_distances + tolerances
+        
+        # Ensure lower_bounds are not negative
+        lower_bounds = torch.clamp(lower_bounds, min=0.0)
+
+        k_noesy_val = parameters.get('k_noesy', 1.0)
+        # Ensure k_noesy_val is a float before creating the tensor
+        if isinstance(k_noesy_val, ParameterSchedule):
+            # This case should ideally be handled by compute_parameters, 
+            # but if parameters dict is directly passed, we get the raw schedule.
+            # For now, let's assume k_noesy is a float or int in the parameters dict passed here.
+            # A more robust solution might involve ensuring compute_parameters is called before this.
+            # For simplicity, we'll assume it's a scalar value here.
+            # If it's a schedule, it implies a time-dependent k, which is fine if it resolves to a scalar.
+            pass # k will be created based on its current value (scalar or scheduled)
+
+        k = torch.full_like(target_distances, float(k_noesy_val))
+
+        return pair_index, (k, lower_bounds, upper_bounds), None
+
 def get_potentials():
     potentials = [
         SymmetricChainCOMPotential(
@@ -382,6 +440,17 @@ def get_potentials():
                 'guidance_weight': 0.05,
                 'resampling_weight': 1.0,
                 'buffer': 0.26180
+            }
+        ),
+        NOESYPotential(
+            parameters={
+                'guidance_interval': 1, 
+                'guidance_weight': PiecewiseStepFunction(
+                    thresholds=[0.2, 0.8], 
+                    values=[0.01, 0.05, 0.01]
+                ),
+                'resampling_weight': 0.1, 
+                'k_noesy': 1.0 
             }
         )
     ]

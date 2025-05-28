@@ -22,6 +22,9 @@ from boltz.data.parse.yaml import parse_yaml
 from boltz.data.types import MSA, Manifest, Record
 from boltz.data.write.writer import BoltzWriter
 from boltz.model.model import Boltz1
+from boltz.data.noesy import read_noesy_restraints, filter_noesy_restraints, map_proton_distances_to_backbone
+from boltz.data.parse.schema import convert_atom_name
+import numpy as np
 
 CCD_URL = "https://huggingface.co/boltz-community/boltz-1/resolve/main/ccd.pkl"
 MODEL_URL = (
@@ -37,6 +40,7 @@ class BoltzProcessedInput:
     targets_dir: Path
     msa_dir: Path
     constraints_dir: Optional[Path] = None
+    noesy_restraints_dir: Optional[Path] = None
 
 
 @dataclass
@@ -303,6 +307,7 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
     msa_pairing_strategy: str,
     max_msa_seqs: int = 4096,
     use_msa_server: bool = False,
+    noesy_file: Optional[str] = None,
 ) -> None:
     """Process the input data and output directory.
 
@@ -318,6 +323,8 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
         Max number of MSA sequences, by default 4096.
     use_msa_server : bool, optional
         Whether to use the MMSeqs2 server for MSA generation, by default False.
+    noesy_file : Optional[str], optional
+        Path to a NOESY restraints file, by default None.
 
     Returns
     -------
@@ -359,6 +366,7 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
     structure_dir = out_dir / "processed" / "structures"
     processed_msa_dir = out_dir / "processed" / "msa"
     processed_constraints_dir = out_dir / "processed" / "constraints"
+    processed_noesy_dir = out_dir / "processed" / "noesy_restraints"
     predictions_dir = out_dir / "predictions"
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -366,6 +374,7 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
     structure_dir.mkdir(parents=True, exist_ok=True)
     processed_msa_dir.mkdir(parents=True, exist_ok=True)
     processed_constraints_dir.mkdir(parents=True, exist_ok=True)
+    processed_noesy_dir.mkdir(parents=True, exist_ok=True)
     predictions_dir.mkdir(parents=True, exist_ok=True)
 
     # Load CCD
@@ -472,6 +481,33 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
             # Dump constraints
             constraints_path = processed_constraints_dir / f"{target.record.id}.npz"
             target.residue_constraints.dump(constraints_path)
+            
+            # Process NOESY restraints if file provided
+            if noesy_file:
+                raw_restraints = read_noesy_restraints(file_path=noesy_file)
+                filtered_restraints = filter_noesy_restraints(raw_restraints, max_distance=7.0, min_distance=1.0)
+                
+                all_residues_in_target = target.structure.residues
+                residue_types_map = {i: res['name'] for i, res in enumerate(all_residues_in_target)}
+
+                mapped_restraints_tuples = map_proton_distances_to_backbone(filtered_restraints, residue_types_map)
+                
+                if mapped_restraints_tuples: 
+                    noesy_save_path = processed_noesy_dir / f"{target.record.id}_noesy.npz"
+                    atom_name_dtype = np.dtype('4i1')
+                    atom_names_1_list = [convert_atom_name(t[4]) for t in mapped_restraints_tuples]
+                    atom_names_2_list = [convert_atom_name(t[5]) for t in mapped_restraints_tuples]
+
+                    np.savez_compressed(
+                        noesy_save_path,
+                        res_idx_1=np.array([t[0] for t in mapped_restraints_tuples], dtype=np.int32),
+                        res_idx_2=np.array([t[1] for t in mapped_restraints_tuples], dtype=np.int32),
+                        peak_id=np.array([t[2] for t in mapped_restraints_tuples], dtype=np.int32),
+                        target_distances=np.array([t[3] for t in mapped_restraints_tuples], dtype=np.float32),
+                        atom_names_1=np.array(atom_names_1_list, dtype=atom_name_dtype),
+                        atom_names_2=np.array(atom_names_2_list, dtype=atom_name_dtype),
+                        tolerances=np.array([t[6] for t in mapped_restraints_tuples], dtype=np.float32)
+                    )
 
         except Exception as e:
             if len(data) > 1:
@@ -604,6 +640,12 @@ def cli() -> None:
     is_flag=True,
     help="Whether to not use potentials for steering. Default is False.",
 )
+@click.option(
+    "--noesy_file",
+    type=click.Path(exists=True, dir_okay=False),
+    help="Optional path to a NOESY restraints file (tab/space separated format).",
+    default=None,
+)
 def predict(
     data: str,
     out_dir: str,
@@ -625,6 +667,7 @@ def predict(
     msa_server_url: str = "https://api.colabfold.com",
     msa_pairing_strategy: str = "greedy",
     no_potentials: bool = False,
+    noesy_file: Optional[str] = None,
 ) -> None:
     """Run predictions with Boltz-1."""
     # If cpu, write a friendly warning
@@ -687,17 +730,23 @@ def predict(
         use_msa_server=use_msa_server,
         msa_server_url=msa_server_url,
         msa_pairing_strategy=msa_pairing_strategy,
+        noesy_file=noesy_file,
     )
 
     # Load processed data
     processed_dir = out_dir / "processed"
+    processed_constraints_dir_path = processed_dir / "constraints"
+    processed_noesy_dir_path = processed_dir / "noesy_restraints"
+    
+    has_constraints_dir = processed_constraints_dir_path.exists() and any(processed_constraints_dir_path.iterdir())
+    has_noesy_dir = processed_noesy_dir_path.exists() and any(processed_noesy_dir_path.iterdir())
+
     processed = BoltzProcessedInput(
         manifest=Manifest.load(processed_dir / "manifest.json"),
         targets_dir=processed_dir / "structures",
         msa_dir=processed_dir / "msa",
-        constraints_dir=(processed_dir / "constraints")
-        if (processed_dir / "constraints").exists()
-        else None,
+        constraints_dir=processed_constraints_dir_path if has_constraints_dir else None,
+        noesy_restraints_dir=processed_noesy_dir_path if has_noesy_dir else None,
     )
 
     # Create data module
@@ -707,6 +756,7 @@ def predict(
         msa_dir=processed.msa_dir,
         num_workers=num_workers,
         constraints_dir=processed.constraints_dir,
+        noesy_restraints_dir=processed.noesy_restraints_dir,
     )
 
     # Load model

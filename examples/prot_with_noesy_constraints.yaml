@@ -1,0 +1,45 @@
+sequences:
+  - protein:
+      id: A
+      sequence: "MADEFGHIKLMNPQRSTVWY" # Example sequence
+      # msa: path/to/msa_for_A.a3m # Optional: if MSA is used
+
+constraints:
+  # Example of existing bond constraint (optional, for context)
+  - bond:
+      atom1: [A, 1, CA] # Chain A, Residue 1 (M), Atom CA
+      atom2: [A, 2, N]  # Chain A, Residue 2 (A), Atom N
+
+  # Example of how NOESY constraints would be defined in YAML
+  # Note: The current implementation primarily uses an external --noesy_file,
+  # but schema.py was prepared for this format.
+  - noesy:
+      residueFrom: 1    # 1-indexed residue number
+      residueTo: 5      # 1-indexed residue number
+      peakID: 1
+      distance: 3.5     # Angstroms, H-H distance as observed
+      atomFrom: "H"     # Proton name in residueFrom
+      atomTo: "HB2"     # Proton name in residueTo (e.g., if residueTo is ALA)
+  - noesy:
+      residueFrom: 2    # Example: Alanine
+      residueTo: 10     # Example: Leucine
+      peakID: 2
+      distance: 4.0
+      atomFrom: "HB1"   # Methyl proton in Alanine
+      atomTo: "HD11"  # Methyl proton in Leucine (example name)
+  - noesy: # Example for Valine to Isoleucine
+      residueFrom: 3    # Assuming residue 3 is VAL
+      residueTo: 7      # Assuming residue 7 is ILE
+      peakID: 3
+      distance: 2.8
+      atomFrom: "HG11"  # A gamma proton of Valine
+      atomTo: "HD12"  # A delta proton of Isoleucine
+
+# To use these NOESY constraints with the current implementation,
+# you would typically provide them in a separate file specified via --noesy_file.
+# The format for that external file would be:
+# residueFrom(1-idx) residueTo(1-idx) peakID distance atomFrom atomTo
+# e.g.:
+# 1	5	1	3.5	H	HB2
+# 2	10	2	4.0	HB1	HD11
+# 3	7	3	2.8	HG11	HD12

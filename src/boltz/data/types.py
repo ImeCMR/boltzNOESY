@@ -434,6 +434,18 @@ class ResidueConstraints(NumpySerializable):
     planar_ring_6_constraints: np.ndarray
 
 
+@dataclass(frozen=True)
+class NOESYConstraint(NumpySerializable):
+    """NOESYConstraint datatype."""
+
+    res_idx_1: np.ndarray  # np.dtype("i4") (for residueFrom)
+    res_idx_2: np.ndarray  # np.dtype("i4") (for residueTo)
+    peak_id: np.ndarray  # np.dtype("i4")
+    distance: np.ndarray  # np.dtype("f4")
+    atom_name_1: np.ndarray  # np.dtype("4i1") (for atomFrom, similar to `name` in `Atom` type)
+    atom_name_2: np.ndarray  # np.dtype("4i1") (for atomTo, similar to `name` in `Atom` type)
+
+
 ####################################################################################################
 # TARGET
 ####################################################################################################
@@ -447,6 +459,7 @@ class Target:
     structure: Structure
     sequences: Optional[dict[str, str]] = None
     residue_constraints: Optional[ResidueConstraints] = None
+    noesy_constraints: Optional[NOESYConstraint] = None
 
 
 @dataclass(frozen=True)
@@ -502,6 +515,7 @@ class Input:
     msa: dict[str, MSA]
     record: Optional[Record] = None
     residue_constraints: Optional[ResidueConstraints] = None
+    noesy_constraints: Optional[NOESYConstraint] = None
 
 
 ####################################################################################################
@@ -542,3 +556,40 @@ class Tokenized:
     structure: Structure
     msa: dict[str, MSA]
     residue_constraints: Optional[ResidueConstraints] = None
+    noesy_constraints: Optional[NOESYConstraint] = None
+
+
+__all__ = [
+    "NumpySerializable",
+    "JSONSerializable",
+    "Atom",
+    "Bond",
+    "Residue",
+    "Chain",
+    "Connection",
+    "Interface",
+    "Structure",
+    "MSAResidue",
+    "MSADeletion",
+    "MSASequence",
+    "MSA",
+    "StructureInfo",
+    "ChainInfo",
+    "InterfaceInfo",
+    "InferenceOptions",
+    "Record",
+    "RDKitBoundsConstraint",
+    "ChiralAtomConstraint",
+    "StereoBondConstraint",
+    "PlanarBondConstraint",
+    "PlanarRing5Constraint",
+    "PlanarRing6Constraint",
+    "ResidueConstraints",
+    "NOESYConstraint",
+    "Target",
+    "Manifest",
+    "Input",
+    "Token",
+    "TokenBond",
+    "Tokenized",
+]

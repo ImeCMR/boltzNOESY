@@ -26,6 +26,7 @@ from boltz.data.types import (
     RDKitBoundsConstraint,
     Record,
     Residue,
+    NOESYConstraint,
     ResidueConstraints,
     StereoBondConstraint,
     Structure,
@@ -998,6 +999,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
     planar_bond_constraint_data = []
     planar_ring_5_constraint_data = []
     planar_ring_6_constraint_data = []
+    noesy_constraint_data = []
 
     # Convert parsed chains to tables
     atom_idx = 0
@@ -1197,6 +1199,17 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                         for chain_name, residue_index in contacts
                     ]
                 )
+        elif "noesy" in constraint:
+            noesy_info = constraint["noesy"]
+            res_idx_1 = int(noesy_info["residueFrom"]) - 1  # 1-indexed to 0-indexed
+            res_idx_2 = int(noesy_info["residueTo"]) - 1  # 1-indexed to 0-indexed
+            peak_id = int(noesy_info["peakID"])
+            distance = float(noesy_info["distance"])
+            atom_name_1 = convert_atom_name(noesy_info["atomFrom"])
+            atom_name_2 = convert_atom_name(noesy_info["atomTo"])
+            noesy_constraint_data.append(
+                (res_idx_1, res_idx_2, peak_id, distance, atom_name_1, atom_name_2)
+            )
         else:
             msg = f"Invalid constraint: {constraint}"
             raise ValueError(msg)
@@ -1227,6 +1240,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
     planar_ring_6_constraints = np.array(
         planar_ring_6_constraint_data, dtype=PlanarRing6Constraint
     )
+    noesy_constraints = np.array(noesy_constraint_data, dtype=NOESYConstraint)
 
     data = Structure(
         atoms=atoms,
@@ -1278,4 +1292,5 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         structure=data,
         sequences=entity_to_seq,
         residue_constraints=residue_constraints,
+        noesy_constraints=noesy_constraints,
     )
